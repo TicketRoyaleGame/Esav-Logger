@@ -1,99 +1,78 @@
 import os
 import discord
 from discord.ext import commands
-import asyncio
 from flask import Flask
 import threading
 
-# שרת רקע קטן בשביל הסטטוס הירוק ב-Render (פורט 10002)
+# שרת רקע קטן בשביל הסטטוס הירוק ב-Render (משתמש בפורט 10003)
 app = Flask(__name__)
 @app.route('/')
 def home(): 
-    return "Welcome & Anti-Link Bot is alive!", 200
+    return "Logger Bot is alive!", 200
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10002))
+    port = int(os.environ.get("PORT", 10003))
     app.run(host="0.0.0.0", port=port)
 
 # =========================================================
-# הגדרות הבוט השני - הנתונים ייקראו בצורה מאובטחת מ-Render
+# הגדרות הבוט השלישי
 # =========================================================
 TOKEN = os.getenv("TOKEN")
-WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))
-
-# רשימת אתרים מותרים בשרת (הבוט לא ימחק קישורים מהאתרים האלו)
-ALLOWED_DOMAINS = ["youtube.com", "youtu.be", "tenor.com", "giphy.com", "discord.com"]
-
-# רשימת 4 הרולים של הצוות שמורשים לשלוח את כל סוגי הקישורים בשרת
-ALLOWED_ROLES_IDS = [
-    1560613411564552345,
-    1560613411564552346,
-    1560613411564552347,
-    1560613411564552348
-]
+GENERAL_LOG_CHANNEL_ID = 1560756016604512376  # ה-ID של חדר הלוגים הכללי בשרת הצוות
 # =========================================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
-intents.members = True  # חובה להפעיל בפורטל המפתחים של הבוט השני!
+intents.members = True
 
 bot = commands.Bot(command_prefix="?", intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f"👋 {bot.user.name} מחובר ומוכן לקבל חברים חדשים ולהגן על הצ'אט!")
+    print(f"📊 {bot.user.name} מחובר ומתעד לוגים בשרת!")
 
-# 1. מערכת הודעות וולקאם (Welcome) מעוצבת
+# 1. לוג הודעות שנמחקו (Message Delete)
 @bot.event
-async def on_member_join(member):
-    channel = bot.get_channel(WELCOME_CHANNEL_ID)
-    if channel:
-        embed = discord.Embed(
-            title="👋 ברוך הבא לשרת שלנו!",
-            description=f"היי {member.mention}, שמחים שהצטרפת אלינו! 🎉\nנא לקרוא את החוקים וליהנות מהשהות שלך בשרת.",
-            color=discord.Color.purple()
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.add_field(name="שם משתמש:", value=f"`{member.name}`", inline=True)
-        embed.add_field(name="מספר חבר בשרת:", value=f"`{len(member.guild.members)}`", inline=True)
-        embed.set_footer(text=f"ID: {member.id}")
-        
-        await channel.send(content=f"ברוך הבא {member.mention}! ✨", embed=embed)
-
-# 2. מערכת אנטי-קישורים (Anti-Link) עם החרגות לאתרים בטוחים ולצוות מורשה
-@bot.event
-async def on_message(message):
+async def on_message_delete(message):
     if message.author.bot:
         return
 
-    # בדיקה אם ההודעה מכילה קישור (http, https או www)
-    if "http://" in message.content.lower() or "https://" in message.content.lower() or "www." in message.content.lower():
-        # בדיקה אם הקישור שייך לאתר מותר מהרשימה (יוטיוב, גיפים וכו')
-        is_allowed = any(domain in message.content.lower() for domain in ALLOWED_DOMAINS)
-        
-        # אם המשתמש הוא מנהל (Administrator), מותר לו לשלוח הכל
-        if message.author.guild_permissions.administrator:
-            is_allowed = True
+    log_channel = bot.get_channel(GENERAL_LOG_CHANNEL_ID)
+    if log_channel:
+        embed = discord.Embed(
+            title="🗑️ הודעה נמחקה",
+            description=f"**נשלחה על ידי:** {message.author.mention}\n**בערוץ:** {message.channel.mention}",
+            color=discord.Color.red()
+        )
+        if message.content:
+            embed.add_field(name="תוכן ההודעה שנמחקה:", value=f"```{message.content}```", inline=False)
+        else:
+            embed.add_field(name="תוכן ההודעה:", value="*הודעה ריקה או מדיה (תמונה/קובץ)*", inline=False)
             
-        # בדיקה אם למשתמש יש את אחד מ-4 הרולים המורשים של הצוות
-        if not is_allowed and hasattr(message.author, 'roles'):
-            has_staff_role = any(role.id in ALLOWED_ROLES_IDS for role in message.author.roles)
-            if has_staff_role:
-                is_allowed = True
+        embed.set_footer(text=f"User ID: {message.author.id} | Message ID: {message.id}")
+        await log_channel.send(embed=embed)
 
-        # אם הקישור לא מותר והמשתמש לא מורשה - מוחקים את ההודעה
-        if not is_allowed:
-            try:
-                await message.delete()
-                # שליחת הודעת אזהרה זמנית שנמחקת אוטומטית אחרי 5 שניות
-                warn_msg = await message.channel.send(f"❌ {message.author.mention}, שליחת קישורים אסורה בשרת זה (חוץ מיוטיוב, גיפים וצוות בכיר)!")
-                await asyncio.sleep(5)
-                await warn_msg.delete()
-            except Exception as e:
-                print(f"Error deleting message: {e}")
-                
-    await bot.process_commands(message)
+# 2. לוג הודעות שנערכו (Message Edit)
+@bot.event
+async def on_message_edit(message_before, message_after):
+    if message_before.author.bot:
+        return
+        
+    if message_before.content == message_after.content:
+        return
+
+    log_channel = bot.get_channel(GENERAL_LOG_CHANNEL_ID)
+    if log_channel:
+        embed = discord.Embed(
+            title="📝 הודעה נערכה",
+            description=f"**נערכה על ידי:** {message_before.author.mention}\n**בערוץ:** {message_before.channel.mention}\n[קפוץ להודעה]({message_after.jump_url})",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="לפני השינוי:", value=f"```{message_before.content}```", inline=False)
+        embed.add_field(name="אחרי השינוי:", value=f"```{message_after.content}```", inline=False)
+        embed.set_footer(text=f"User ID: {message_before.author.id}")
+        await log_channel.send(embed=embed)
 
 # הפעלת שרת הרקע והבוט ביחד
 threading.Thread(target=run_flask, daemon=True).start()
