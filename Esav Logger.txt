@@ -1,0 +1,100 @@
+import os
+import discord
+from discord.ext import commands
+import asyncio
+from flask import Flask
+import threading
+
+# שרת רקע קטן בשביל הסטטוס הירוק ב-Render (פורט 10002)
+app = Flask(__name__)
+@app.route('/')
+def home(): 
+    return "Welcome & Anti-Link Bot is alive!", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10002))
+    app.run(host="0.0.0.0", port=port)
+
+# =========================================================
+# הגדרות הבוט השני - הנתונים ייקראו בצורה מאובטחת מ-Render
+# =========================================================
+TOKEN = os.getenv("TOKEN")
+WELCOME_CHANNEL_ID = int(os.getenv("WELCOME_CHANNEL_ID", "0"))
+
+# רשימת אתרים מותרים בשרת (הבוט לא ימחק קישורים מהאתרים האלו)
+ALLOWED_DOMAINS = ["youtube.com", "youtu.be", "tenor.com", "giphy.com", "discord.com"]
+
+# רשימת 4 הרולים של הצוות שמורשים לשלוח את כל סוגי הקישורים בשרת
+ALLOWED_ROLES_IDS = [
+    1560613411564552345,
+    1560613411564552346,
+    1560613411564552347,
+    1560613411564552348
+]
+# =========================================================
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.members = True  # חובה להפעיל בפורטל המפתחים של הבוט השני!
+
+bot = commands.Bot(command_prefix="?", intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f"👋 {bot.user.name} מחובר ומוכן לקבל חברים חדשים ולהגן על הצ'אט!")
+
+# 1. מערכת הודעות וולקאם (Welcome) מעוצבת
+@bot.event
+async def on_member_join(member):
+    channel = bot.get_channel(WELCOME_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(
+            title="👋 ברוך הבא לשרת שלנו!",
+            description=f"היי {member.mention}, שמחים שהצטרפת אלינו! 🎉\nנא לקרוא את החוקים וליהנות מהשהות שלך בשרת.",
+            color=discord.Color.purple()
+        )
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.add_field(name="שם משתמש:", value=f"`{member.name}`", inline=True)
+        embed.add_field(name="מספר חבר בשרת:", value=f"`{len(member.guild.members)}`", inline=True)
+        embed.set_footer(text=f"ID: {member.id}")
+        
+        await channel.send(content=f"ברוך הבא {member.mention}! ✨", embed=embed)
+
+# 2. מערכת אנטי-קישורים (Anti-Link) עם החרגות לאתרים בטוחים ולצוות מורשה
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    # בדיקה אם ההודעה מכילה קישור (http, https או www)
+    if "http://" in message.content.lower() or "https://" in message.content.lower() or "www." in message.content.lower():
+        # בדיקה אם הקישור שייך לאתר מותר מהרשימה (יוטיוב, גיפים וכו')
+        is_allowed = any(domain in message.content.lower() for domain in ALLOWED_DOMAINS)
+        
+        # אם המשתמש הוא מנהל (Administrator), מותר לו לשלוח הכל
+        if message.author.guild_permissions.administrator:
+            is_allowed = True
+            
+        # בדיקה אם למשתמש יש את אחד מ-4 הרולים המורשים של הצוות
+        if not is_allowed and hasattr(message.author, 'roles'):
+            has_staff_role = any(role.id in ALLOWED_ROLES_IDS for role in message.author.roles)
+            if has_staff_role:
+                is_allowed = True
+
+        # אם הקישור לא מותר והמשתמש לא מורשה - מוחקים את ההודעה
+        if not is_allowed:
+            try:
+                await message.delete()
+                # שליחת הודעת אזהרה זמנית שנמחקת אוטומטית אחרי 5 שניות
+                warn_msg = await message.channel.send(f"❌ {message.author.mention}, שליחת קישורים אסורה בשרת זה (חוץ מיוטיוב, גיפים וצוות בכיר)!")
+                await asyncio.sleep(5)
+                await warn_msg.delete()
+            except Exception as e:
+                print(f"Error deleting message: {e}")
+                
+    await bot.process_commands(message)
+
+# הפעלת שרת הרקע והבוט ביחד
+threading.Thread(target=run_flask, daemon=True).start()
+bot.run(TOKEN)
